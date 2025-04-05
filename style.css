@@ -521,3 +521,42 @@ body {
                 justify-content: flex-end;
             }
         }
+        /* Report Type Cards */
+.report-type-card {
+    cursor: pointer;
+    transition: all 0.3s ease;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.5rem;
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+.report-type-card:hover {
+    background-color: #f7fafc;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+.report-type-card.active {
+    background-color: #ebf8ff;
+    border-color: #4299e1;
+}
+
+.report-icon {
+    font-size: 2rem;
+    margin-bottom: 0.5rem;
+    color: #4a5568;
+}
+
+.report-title {
+    font-weight: 500;
+    text-align: center;
+}
+
+.report-type-card.active .report-icon,
+.report-type-card.active .report-title {
+    color: #3182ce;
+}
