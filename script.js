@@ -130,14 +130,14 @@ navItems.forEach((item) => {
 })
 
 // Modal handlers
-function setupModal(modalId, openBtnId, closeBtnId) {
+const setupModal = (modalId, btnId, closeId) => {
   const modal = document.getElementById(modalId)
-  const openBtn = document.getElementById(openBtnId)
-  const closeBtn = document.getElementById(closeBtnId)
+  const btn = document.getElementById(btnId)
+  const closeBtn = document.getElementById(closeId)
 
-  if (openBtn) {
-    openBtn.addEventListener("click", () => {
-      modal.style.display = "flex"
+  if (btn) {
+    btn.addEventListener("click", () => {
+      modal.style.display = "block"
     })
   }
 
@@ -148,7 +148,7 @@ function setupModal(modalId, openBtnId, closeBtnId) {
   }
 
   window.addEventListener("click", (event) => {
-    if (event.target === modal) {
+    if (event.target == modal) {
       modal.style.display = "none"
     }
   })
@@ -167,22 +167,23 @@ setupModal("add-expense-modal", "add-expense-btn", "close-add-expense-modal")
 setupModal("edit-expense-modal", null, "close-edit-expense-modal")
 setupModal("generate-pdf-modal", "generate-stock-pdf", "close-generate-pdf-modal")
 setupModal("delete-confirmation-modal", null, "close-delete-confirmation-modal")
+setupModal("export-report-modal", "export-report-btn", "close-export-report-modal")
 
 // Link PDF generation buttons to modal
 document.getElementById("generate-ledger-pdf").addEventListener("click", () => {
-  document.getElementById("generate-pdf-modal").style.display = "flex"
+  document.getElementById("generate-pdf-modal").style.display = "block"
 })
 
 document.getElementById("generate-customer-ledger-pdf").addEventListener("click", () => {
-  document.getElementById("generate-pdf-modal").style.display = "flex"
+  document.getElementById("generate-pdf-modal").style.display = "block"
 })
 
 document.getElementById("generate-expense-pdf").addEventListener("click", () => {
-  document.getElementById("generate-pdf-modal").style.display = "flex"
+  document.getElementById("generate-pdf-modal").style.display = "block"
 })
 
 document.getElementById("generate-report-pdf").addEventListener("click", () => {
-  document.getElementById("generate-pdf-modal").style.display = "flex"
+  document.getElementById("generate-pdf-modal").style.display = "block"
 })
 
 // Setup sorting
@@ -425,21 +426,50 @@ function setupFilters(dataType) {
 
   // Add event listeners for input fields to apply filters on Enter key
   if (dataType === "stock") {
-    document.getElementById("stock-search").addEventListener("keyup", (e) => {
-      if (e.key === "Enter") applyFilters(dataType)
-    })
+    const searchInput = document.getElementById("stock-search")
+    if (searchInput) {
+      searchInput.addEventListener("keyup", (e) => {
+        if (e.key === "Enter") applyFilters(dataType)
+        // Add live search functionality
+        filterState.stock.name = searchInput.value.trim()
+        loadStockData()
+      })
+    }
   } else if (dataType === "customers") {
-    document.getElementById("customer-search").addEventListener("keyup", (e) => {
-      if (e.key === "Enter") applyFilters(dataType)
-    })
+    const searchInput = document.getElementById("customer-search")
+    if (searchInput) {
+      searchInput.addEventListener("keyup", (e) => {
+        if (e.key === "Enter") applyFilters(dataType)
+        // Add live search functionality
+        filterState.customers.name = searchInput.value.trim()
+        loadCustomersData()
+      })
+    }
   } else if (dataType === "ledger") {
-    document.getElementById("ledger-search").addEventListener("keyup", (e) => {
-      if (e.key === "Enter") applyFilters(dataType)
-    })
+    const searchInput = document.getElementById("ledger-search")
+    if (searchInput) {
+      searchInput.addEventListener("keyup", (e) => {
+        if (e.key === "Enter") applyFilters(dataType)
+        // Add live search functionality
+        filterState.ledger.title = searchInput.value.trim()
+        if (currentCustomerId) {
+          viewCustomerLedger(
+            currentCustomerId,
+            document.getElementById("customer-name-title").textContent.replace("'s Ledger", ""),
+          )
+        }
+      })
+    }
   } else if (dataType === "expenses") {
-    document.getElementById("expense-search").addEventListener("keyup", (e) => {
-      if (e.key === "Enter") applyFilters(dataType)
-    })
+    const searchInput = document.getElementById("expense-search")
+    if (searchInput) {
+      searchInput.addEventListener("keyup", (e) => {
+        if (e.key === "Enter") applyFilters(dataType)
+        // Add live search functionality
+        filterState.expenses.title = searchInput.value.trim()
+        loadExpensesData()
+      })
+    }
   }
 
   // Add event listener for reset button
@@ -528,6 +558,9 @@ window.addEventListener("DOMContentLoaded", () => {
   loadDashboardData()
   loadCategories()
   loadExpenseCategories()
+
+  // Setup report type selection
+  setupReportTypeSelection()
 })
 
 // Dashboard Data
@@ -537,6 +570,13 @@ async function loadDashboardData() {
     stockData = await ipcRenderer.invoke("get-stocks")
     customersData = await ipcRenderer.invoke("get-customers")
     expensesData = await ipcRenderer.invoke("get-expenses")
+
+    // Get ledger data for all customers
+    ledgerEntries = []
+    for (const customer of customersData) {
+      const entries = await ipcRenderer.invoke("get-ledger", customer._id)
+      ledgerEntries = [...ledgerEntries, ...entries]
+    }
 
     // Calculate totals
     let totalStockValue = 0
@@ -2523,8 +2563,6 @@ document.getElementById("edit-transaction-form").addEventListener("submit", asyn
     console.error("Error updating transaction:", error)
     showToast("Error", "Failed to update transaction", "error")
   }
-  console.error("Error updating transaction:", error)
-  showToast("Error", "Failed to update transaction", "error")
 })
 
 // Load products for transaction form
@@ -2956,39 +2994,637 @@ document.getElementById("cancel-delete-btn").addEventListener("click", () => {
   document.getElementById("delete-confirmation-modal").style.display = "none"
 })
 
-// Backup and Restore
-document.getElementById("backup-btn").addEventListener("click", async () => {
-  try {
-    const result = await ipcRenderer.invoke("create-backup")
+// PDF Generation
+document.getElementById("generate-pdf-form").addEventListener("submit", async (event) => {
+  event.preventDefault()
 
-    if (result.success) {
-      showToast("Success", result.message)
-    } else {
-      showToast("Error", result.message, "error")
+  const startDate = document.getElementById("pdf-start-date").value
+  const endDate = document.getElementById("pdf-end-date").value
+
+  // Determine which page is active to know which report to generate
+  let reportType = ""
+  let pageTitle = ""
+
+  if (document.getElementById("stock-page").classList.contains("active")) {
+    reportType = "stock"
+    pageTitle = "Stock Report"
+  } else if (document.getElementById("ledger-page").classList.contains("active")) {
+    reportType = "ledger"
+    pageTitle = "Customers Report"
+  } else if (document.getElementById("customer-ledger-page").classList.contains("active")) {
+    reportType = "customer-ledger"
+    pageTitle = "Customer Ledger Report"
+  } else if (document.getElementById("transactions-page").classList.contains("active")) {
+    reportType = "expense"
+    pageTitle = "Expense Report"
+  } else if (document.getElementById("reports-page").classList.contains("active")) {
+    reportType = "report"
+    pageTitle = document.getElementById("report-title").textContent
+  }
+
+  try {
+    // Ensure jsPDF and autoTable are available
+    if (typeof window.jspdf === "undefined" || typeof window.jspdf.jsPDF === "undefined") {
+      throw new Error("jsPDF library not loaded properly")
     }
+
+    // Initialize jsPDF
+    const { jsPDF } = window.jspdf
+    const doc = new jsPDF()
+
+    // Ensure autoTable plugin is available
+    if (typeof doc.autoTable !== "function") {
+      throw new Error("AutoTable plugin not loaded properly")
+    }
+
+    // Add header
+    doc.setFontSize(18)
+    doc.text(pageTitle, 14, 22)
+
+    // Add date range
+    doc.setFontSize(10)
+    doc.text(`Period: ${formatDate(startDate)} - ${formatDate(endDate)}`, 14, 30)
+    doc.text(`Generated on: ${formatDate(new Date())}`, 14, 36)
+    doc.text(`Generated by: itshassanraza`, 14, 42)
+
+    // Generate report based on type
+    if (reportType === "stock") {
+      // Filter stock data by date range
+      const filteredStocks = stockData.filter((stock) => {
+        const stockDate = new Date(stock.date)
+        return stockDate >= new Date(startDate) && stockDate <= new Date(endDate)
+      })
+
+      // Process stock data for summary
+      const stockSummary = {}
+
+      filteredStocks.forEach((stock) => {
+        const key = `${stock.name}`
+
+        if (!stockSummary[key]) {
+          stockSummary[key] = {
+            name: stock.name,
+            category: stock.category,
+            totalQuantity: 0,
+            totalValue: 0,
+          }
+        }
+
+        stockSummary[key].totalQuantity += stock.quantity
+        stockSummary[key].totalValue += stock.quantity * stock.price
+      })
+
+      // Generate summary table
+      doc.autoTable({
+        startY: 48,
+        head: [["Item Name", "Category", "Total Quantity", "Average Price", "Value"]],
+        body: Object.values(stockSummary).map((item) => [
+          item.name,
+          item.category,
+          item.totalQuantity,
+          formatCurrency(item.totalValue / item.totalQuantity),
+          formatCurrency(item.totalValue),
+        ]),
+        headStyles: { fillColor: [0, 0, 0] },
+      })
+
+      // Generate entries table
+      const finalY = doc.lastAutoTable ? doc.lastAutoTable.finalY : 48
+
+      doc.autoTable({
+        startY: finalY + 15,
+        head: [["Date", "Item Name", "Category", "Color", "Quantity", "Price", "Total"]],
+        body: filteredStocks.map((stock) => [
+          formatDate(stock.date),
+          stock.name,
+          stock.category,
+          stock.color || "-",
+          stock.quantity,
+          formatCurrency(stock.price),
+          formatCurrency(stock.quantity * stock.price),
+        ]),
+        headStyles: { fillColor: [0, 0, 0] },
+      })
+    } else if (reportType === "ledger") {
+      // Generate customers summary
+      const tableData = []
+
+      for (const customer of customersData) {
+        const entries = await ipcRenderer.invoke("get-ledger", customer._id)
+
+        // Filter by date range
+        const filteredEntries = entries.filter((entry) => {
+          const entryDate = new Date(entry.date)
+          return entryDate >= new Date(startDate) && entryDate <= new Date(endDate)
+        })
+
+        let totalDebit = 0
+        let totalCredit = 0
+
+        filteredEntries.forEach((entry) => {
+          if (entry.type === "debit") {
+            totalDebit += entry.amount
+          } else {
+            totalCredit += entry.amount
+          }
+        })
+
+        tableData.push([
+          customer.name,
+          formatCurrency(totalDebit),
+          formatCurrency(totalCredit),
+          formatCurrency(totalDebit - totalCredit),
+        ])
+      }
+
+      doc.autoTable({
+        startY: 48,
+        head: [["Customer Name", "Total Debit", "Total Credit", "Balance"]],
+        body: tableData,
+        headStyles: { fillColor: [0, 0, 0] },
+      })
+    } else if (reportType === "customer-ledger") {
+      // Get customer name
+      const customerName = document.getElementById("customer-name-title").textContent.replace("'s Ledger", "")
+
+      // Get ledger entries
+      const entries = await ipcRenderer.invoke("get-ledger", currentCustomerId)
+
+      // Filter by date range
+      const filteredEntries = entries.filter((entry) => {
+        const entryDate = new Date(entry.date)
+        return entryDate >= new Date(startDate) && entryDate <= new Date(endDate)
+      })
+
+      // Sort by date
+      filteredEntries.sort((a, b) => new Date(a.date) - new Date(b.date))
+
+      // Calculate running balance
+      let runningBalance = 0
+      let totalDebit = 0
+      let totalCredit = 0
+
+      const tableData = filteredEntries.map((entry) => {
+        if (entry.type === "debit") {
+          runningBalance += entry.amount
+          totalDebit += entry.amount
+        } else {
+          runningBalance -= entry.amount
+          totalCredit += entry.amount
+        }
+
+        return [
+          formatDate(entry.date),
+          entry.title,
+          entry.description || "-",
+          entry.reference || "-",
+          entry.productName || "-",
+          entry.type === "debit" ? formatCurrency(entry.amount) : "-",
+          entry.type === "credit" ? formatCurrency(entry.amount) : "-",
+          formatCurrency(runningBalance),
+        ]
+      })
+
+      // Update title with customer name
+      doc.setFontSize(18)
+      doc.text(`${customerName}'s Ledger Report`, 14, 22)
+
+      // Add summary
+      doc.setFontSize(12)
+      doc.text(`Total Debit: ${formatCurrency(totalDebit)}`, 14, 48)
+      doc.text(`Total Credit: ${formatCurrency(totalCredit)}`, 14, 55)
+      doc.text(`Balance: ${formatCurrency(totalDebit - totalCredit)}`, 14, 62)
+
+      doc.autoTable({
+        startY: 68,
+        head: [["Date", "Title", "Description", "Reference", "Product", "Debit", "Credit", "Balance"]],
+        body: tableData,
+        headStyles: { fillColor: [0, 0, 0] },
+      })
+    } else if (reportType === "expense") {
+      // Filter expenses by date range
+      const filteredExpenses = expensesData.filter((expense) => {
+        const expenseDate = new Date(expense.date)
+        return expenseDate >= new Date(startDate) && expenseDate <= new Date(endDate)
+      })
+
+      // Calculate category totals
+      const categorySummary = {}
+
+      filteredExpenses.forEach((expense) => {
+        if (!categorySummary[expense.category]) {
+          categorySummary[expense.category] = {
+            debit: 0,
+            credit: 0,
+          }
+        }
+
+        if (expense.type === "debit") {
+          categorySummary[expense.category].debit += expense.amount
+        } else {
+          categorySummary[expense.category].credit += expense.amount
+        }
+      })
+
+      // Generate summary table
+      const summaryData = Object.entries(categorySummary).map(([category, data]) => [
+        category,
+        formatCurrency(data.debit),
+        formatCurrency(data.credit),
+        formatCurrency(data.credit - data.debit),
+      ])
+
+      // Calculate totals
+      let totalDebit = 0
+      let totalCredit = 0
+
+      Object.values(categorySummary).forEach((data) => {
+        totalDebit += data.debit
+        totalCredit += data.credit
+      })
+
+      // Add totals row
+      summaryData.push([
+        "TOTAL",
+        formatCurrency(totalDebit),
+        formatCurrency(totalCredit),
+        formatCurrency(totalCredit - totalDebit),
+      ])
+
+      doc.autoTable({
+        startY: 48,
+        head: [["Category", "Expense", "Income", "Net"]],
+        body: summaryData,
+        headStyles: { fillColor: [0, 0, 0] },
+      })
+
+      // Generate entries table
+      const finalY = doc.lastAutoTable ? doc.lastAutoTable.finalY : 48
+
+      doc.autoTable({
+        startY: finalY + 15,
+        head: [["Date", "Category", "Title", "Description", "Amount", "Type"]],
+        body: filteredExpenses.map((expense) => [
+          formatDate(expense.date),
+          expense.category,
+          expense.title,
+          expense.description || "-",
+          formatCurrency(expense.amount),
+          expense.type === "debit" ? "Expense" : "Income",
+        ]),
+        headStyles: { fillColor: [0, 0, 0] },
+      })
+    } else if (reportType === "report") {
+      // Get the report content
+      const reportContent = document.getElementById("report-content")
+
+      // Use html2canvas to capture the report content
+      doc.html(reportContent, {
+        callback: (doc) => {
+          // Save the PDF
+          doc.save(`${pageTitle.toLowerCase().replace(/\s+/g, "-")}-${startDate}-to-${endDate}.pdf`)
+        },
+        x: 15,
+        y: 48,
+        width: 180,
+        windowWidth: 800,
+      })
+
+      // Return early since we're using html2canvas
+      document.getElementById("generate-pdf-modal").style.display = "none"
+      showToast("Success", "PDF generated successfully")
+      return
+    }
+
+    // Save the PDF
+    doc.save(`${pageTitle.toLowerCase().replace(/\s+/g, "-")}-${startDate}-to-${endDate}.pdf`)
+
+    // Close modal
+    document.getElementById("generate-pdf-modal").style.display = "none"
+
+    showToast("Success", "PDF generated successfully")
   } catch (error) {
-    console.error("Error creating backup:", error)
-    showToast("Error", "Failed to create backup", "error")
+    console.error("Error generating PDF:", error)
+    showToast("Error", `Failed to generate PDF: ${error.message}`, "error")
   }
 })
 
-document.getElementById("restore-btn").addEventListener("click", async () => {
-  try {
-    const result = await ipcRenderer.invoke("restore-backup")
+// Setup report type selection
+function setupReportTypeSelection() {
+  const reportTypeCards = document.querySelectorAll(".report-type-card")
+  const reportTypeSelect = document.getElementById("report-type")
 
-    if (result.success) {
-      showToast("Success", result.message)
+  reportTypeCards.forEach((card) => {
+    card.addEventListener("click", () => {
+      // Remove active class from all cards
+      reportTypeCards.forEach((c) => c.classList.remove("active"))
 
-      // Refresh data
-      loadDashboardData()
-      loadCategories()
-      loadExpenseCategories()
-    } else {
-      showToast("Error", result.message, "error")
-    }
-  } catch (error) {
-    console.error("Error restoring backup:", error)
-    showToast("Error", "Failed to restore backup", "error")
-  }
+      // Add active class to clicked card
+      card.classList.add("active")
+
+      // Get report type
+      const reportType = card.getAttribute("data-report")
+
+      // Update report title
+      document.getElementById("report-title").textContent = card.querySelector(".report-title").textContent
+
+      // Update filter state
+      filterState.reports.type = reportType
+
+      // Load report data
+      loadReportsData()
+    })
+  })
+}
+
+// Export report functionality
+document.getElementById("export-report-btn").addEventListener("click", () => {
+  document.getElementById("export-report-modal").style.display = "block"
 })
+
+document.getElementById('export-report-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    
+    const format = document.getElementById('export-format').value;
+    const reportTitle = document.getElementById('report-title').textContent;
+    const reportContent = document.getElementById('report-content');
+    
+    try {
+        if (format === 'pdf') {
+            // Create PDF
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+            
+            // Add title
+            doc.setFontSize(18);
+            doc.text(reportTitle, 14, 22);
+            
+            // Add date range
+            doc.setFontSize(12);
+            doc.text(`Period: ${formatDate(filterState.reports.dateFrom)} - ${formatDate(filterState.reports.dateTo)}`, 14, 30);
+            
+            // Add content
+            doc.html(reportContent, {
+                callback: (doc) => {
+                    doc.save(`${reportTitle.replace(/\s+/g, '-').toLowerCase()}-${new Date().toISOString().split('T')[0]}.pdf`);
+                },
+                x: 15,
+                y: 40,
+                width: 180,
+                windowWidth: 800
+            });
+        } else if (format === 'excel' || format === 'csv') {
+            // For Excel/CSV, extract data from tables
+            const tables = reportContent.querySelectorAll('table');
+            if (tables.length > 0) {
+                let csvContent = "data:text/csv;charset=utf-8,";
+                
+                // Add title
+                csvContent += `${reportTitle}\r\n`;
+                csvContent += `Period: ${formatDate(filterState.reports.dateFrom)} - ${formatDate(filterState.reports.dateTo)}\r\n\r\n`;
+                
+                // Process each table
+                tables.forEach((table, tableIndex) => {
+                    // Get table header
+                    const headers = Array.from(table.querySelectorAll('th')).map(th => th.textContent.trim());
+                    csvContent += headers.join(',') + '\r\n';
+                    
+                    // Get table rows
+                    const rows = table.querySelectorAll('tbody tr');
+                    rows.forEach(row => {
+                        const rowData = Array.from(row.querySelectorAll('td')).map(td => {
+                            // Remove commas and quotes to avoid CSV issues
+                            return `"${td.textContent.trim().replace(/"/g, '""')}"`;
+                        });
+                        csvContent += rowData.join(',') + '\r\n';
+                    });
+                    
+                    // Add space between tables
+                    if (tableIndex < tables.length - 1) {
+                        csvContent += '\r\n';
+                    }
+                });
+                
+                // Create download link
+                const encodedUri = encodeURI(csvContent);
+                const link = document.createElement('a');
+                link.setAttribute('href', encodedUri);
+                link.setAttribute('download', `${reportTitle.replace(/\s+/g, '-').toLowerCase()}-${new Date().toISOString().split('T')[0]}.${format}`);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            } else {
+                showToast('Error', 'No table data found to export', 'error');
+            }
+        }
+        
+        // Close modal
+        document.getElementById('export-report-modal').style.display = 'none';
+        
+        showToast('Success', `Report exported as ${format.toUpperCase()} successfully`);
+    } catch (error) {
+        console.error('Error exporting report:', error);
+        showToast('Error', 'Failed to export report', 'error');
+    }
+});
+
+
+
+// Reports functionality
+document.addEventListener("DOMContentLoaded", () => {
+    // Setup report type selection
+    setupReportTypeSelection();
+    
+    // Setup export report button
+    setupExportReportButton();
+});
+
+// Setup report type selection
+function setupReportTypeSelection() {
+    const reportTypeCards = document.querySelectorAll('.report-type-card');
+    const reportTitle = document.getElementById('report-title');
+    
+    reportTypeCards.forEach(card => {
+        card.addEventListener('click', () => {
+            // Remove active class from all cards
+            reportTypeCards.forEach(c => c.classList.remove('active'));
+            
+            // Add active class to clicked card
+            card.classList.add('active');
+            
+            // Get report type
+            const reportType = card.getAttribute('data-report');
+            
+            // Update report title
+            reportTitle.textContent = card.querySelector('.report-title').textContent;
+            
+            // Show appropriate filters based on report type
+            toggleReportFilters(reportType);
+            
+            // Update filter state
+            if (window.filterState && window.filterState.reports) {
+                window.filterState.reports.type = reportType;
+                
+                // Load report data
+                if (typeof window.loadReportsData === 'function') {
+                    window.loadReportsData();
+                }
+            }
+        });
+    });
+}
+
+function toggleReportFilters(reportType) {
+    const customerFilter = document.getElementById('report-customer-filter');
+    const categoryFilter = document.getElementById('report-category-filter');
+    
+    // Reset filters
+    if (customerFilter) customerFilter.style.display = 'none';
+    if (categoryFilter) categoryFilter.style.display = 'none';
+    
+    // Show appropriate filters based on report type
+    if (reportType === 'customer-ledger') {
+        if (customerFilter) customerFilter.style.display = 'block';
+    } else if (reportType === 'stock-ledger' || reportType === 'expense-report') {
+        if (categoryFilter) categoryFilter.style.display = 'block';
+    }
+}
+
+function setupExportReportButton() {
+    const exportReportBtn = document.getElementById('export-report-btn');
+    const exportReportModal = document.getElementById('export-report-modal');
+    const closeExportReportModal = document.getElementById('close-export-report-modal');
+    
+    if (exportReportBtn) {
+        exportReportBtn.addEventListener('click', () => {
+            if (exportReportModal) {
+                exportReportModal.style.display = 'block';
+            }
+        });
+    }
+    
+    if (closeExportReportModal) {
+        closeExportReportModal.addEventListener('click', () => {
+            if (exportReportModal) {
+                exportReportModal.style.display = 'none';
+            }
+        });
+    }
+    
+    // Setup export report form
+    const exportReportForm = document.getElementById('export-report-form');
+    if (exportReportForm) {
+        exportReportForm.addEventListener('submit', (event) => {
+            event.preventDefault();
+            
+            const format = document.getElementById('export-format').value;
+            exportReport(format);
+            
+            // Close modal
+            if (exportReportModal) {
+                exportReportModal.style.display = 'none';
+            }
+        });
+    }
+}
+
+function exportReport(format) {
+    try {
+        const reportTitle = document.getElementById('report-title').textContent;
+        const reportContent = document.getElementById('report-content');
+        
+        if (format === 'pdf') {
+            // Create PDF
+            const { jsPDF } = window.jspdf;
+            if (!jsPDF) {
+                throw new Error('jsPDF library not loaded properly');
+            }
+            
+            const doc = new jsPDF();
+            
+            // Add title
+            doc.setFontSize(18);
+            doc.text(reportTitle, 14, 22);
+            
+            // Add date range
+            doc.setFontSize(12);
+            if (window.filterState && window.filterState.reports) {
+                doc.text(`Period: ${window.formatDate(window.filterState.reports.dateFrom)} - ${window.formatDate(window.filterState.reports.dateTo)}`, 14, 30);
+            }
+            
+            // Add content
+            doc.html(reportContent, {
+                callback: (doc) => {
+                    doc.save(`${reportTitle.replace(/\s+/g, '-').toLowerCase()}-${new Date().toISOString().split('T')[0]}.pdf`);
+                },
+                x: 15,
+                y: 40,
+                width: 180,
+                windowWidth: 800
+            });
+        } else if (format === 'excel' || format === 'csv') {
+            // For Excel/CSV, we'll need to extract data from tables
+            const tables = reportContent.querySelectorAll('table');
+            if (tables.length > 0) {
+                let csvContent = "data:text/csv;charset=utf-8,";
+                
+                // Add title
+                csvContent += `${reportTitle}\r\n`;
+                if (window.filterState && window.filterState.reports) {
+                    csvContent += `Period: ${window.formatDate(window.filterState.reports.dateFrom)} - ${window.formatDate(window.filterState.reports.dateTo)}\r\n\r\n`;
+                }
+                
+                // Process each table
+                tables.forEach((table, tableIndex) => {
+                    // Get table header
+                    const headers = Array.from(table.querySelectorAll('th')).map(th => th.textContent.trim());
+                    csvContent += headers.join(',') + '\r\n';
+                    
+                    // Get table rows
+                    const rows = table.querySelectorAll('tbody tr');
+                    rows.forEach(row => {
+                        const rowData = Array.from(row.querySelectorAll('td')).map(td => {
+                            // Remove commas and quotes to avoid CSV issues
+                            return `"${td.textContent.trim().replace(/"/g, '""')}"`;
+                        });
+                        csvContent += rowData.join(',') + '\r\n';
+                    });
+                    
+                    // Add space between tables
+                    if (tableIndex < tables.length - 1) {
+                        csvContent += '\r\n';
+                    }
+                });
+                
+                // Create download link
+                const encodedUri = encodeURI(csvContent);
+                const link = document.createElement('a');
+                link.setAttribute('href', encodedUri);
+                link.setAttribute('download', `${reportTitle.replace(/\s+/g, '-').toLowerCase()}-${new Date().toISOString().split('T')[0]}.${format}`);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            } else {
+                if (window.showToast) {
+                    window.showToast('Error', 'No table data found to export', 'error');
+                } else {
+                    alert('Error: No table data found to export');
+                }
+            }
+        }
+        
+        if (window.showToast) {
+            window.showToast('Success', `Report exported as ${format.toUpperCase()} successfully`);
+        } else {
+            alert(`Success: Report exported as ${format.toUpperCase()} successfully`);
+        }
+    } catch (error) {
+        console.error('Error exporting report:', error);
+        if (window.showToast) {
+            window.showToast('Error', 'Failed to export report', 'error');
+        } else {
+            alert('Error: Failed to export report');
+        }
+    }
+}
 
