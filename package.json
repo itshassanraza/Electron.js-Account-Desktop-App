@@ -1,0 +1,32 @@
+{
+    "name": "stock-management-system",
+    "version": "1.0.0",
+    "description": "Desktop application for stock management, ledger tracking, and expense management",
+    "main": "main.js",
+    "scripts": {
+      "start": "electron .",
+      "build": "electron-builder"
+    },
+    "author": "itshassanraza",
+    "license": "MIT",
+    "devDependencies": {
+      "electron": "^25.0.0",
+      "electron-builder": "^24.6.3"
+    },
+    "dependencies": {
+      "chart.js": "^4.3.0",
+      "electron-store": "^8.1.0",
+      "jspdf": "^2.5.1",
+      "jspdf-autotable": "^3.5.31",
+      "nedb": "^1.8.0",
+      "tailwindcss": "^3.3.3"
+    },
+    "build": {
+      "appId": "com.itshassanraza.stockmanagement",
+      "productName": "Stock Management System",
+      "win": {
+        "target": "nsis",
+        "icon": "assets/icon.ico"
+      }
+    }
+  }
