@@ -49,9 +49,22 @@ app.on('window-all-closed', function () {
 
 // IPC handlers for database operations
 // Stock Management
-ipcMain.handle('get-stocks', async () => {
+ipcMain.handle('get-stocks', async (event, filters = {}) => {
   return new Promise((resolve, reject) => {
-    db.stocks.find({}).sort({ date: -1 }).exec((err, stocks) => {
+    let query = {};
+    
+    // Apply filters if provided
+    if (filters.name) {
+      query.name = new RegExp(filters.name, 'i');
+    }
+    if (filters.category) {
+      query.category = filters.category;
+    }
+    if (filters.dateFrom && filters.dateTo) {
+      query.date = { $gte: filters.dateFrom, $lte: filters.dateTo };
+    }
+    
+    db.stocks.find(query).sort({ date: -1 }).exec((err, stocks) => {
       if (err) reject(err);
       resolve(stocks);
     });
@@ -63,6 +76,24 @@ ipcMain.handle('add-stock', async (event, stockData) => {
     db.stocks.insert(stockData, (err, newStock) => {
       if (err) reject(err);
       resolve(newStock);
+    });
+  });
+});
+
+ipcMain.handle('update-stock', async (event, stockId, updatedData) => {
+  return new Promise((resolve, reject) => {
+    db.stocks.update({ _id: stockId }, { $set: updatedData }, {}, (err, numReplaced) => {
+      if (err) reject(err);
+      resolve(numReplaced > 0);
+    });
+  });
+});
+
+ipcMain.handle('delete-stock', async (event, stockId) => {
+  return new Promise((resolve, reject) => {
+    db.stocks.remove({ _id: stockId }, {}, (err, numRemoved) => {
+      if (err) reject(err);
+      resolve(numRemoved > 0);
     });
   });
 });
@@ -86,9 +117,14 @@ ipcMain.handle('add-stock-category', async (event, categoryData) => {
 });
 
 // Customer and Ledger Management
-ipcMain.handle('get-customers', async () => {
+ipcMain.handle('get-customers', async (event, searchTerm = '') => {
   return new Promise((resolve, reject) => {
-    db.customers.find({}).exec((err, customers) => {
+    let query = {};
+    if (searchTerm) {
+      query = { name: new RegExp(searchTerm, 'i') };
+    }
+    
+    db.customers.find(query).exec((err, customers) => {
       if (err) reject(err);
       resolve(customers);
     });
@@ -104,9 +140,46 @@ ipcMain.handle('add-customer', async (event, customerData) => {
   });
 });
 
-ipcMain.handle('get-ledger', async (event, customerId) => {
+ipcMain.handle('update-customer', async (event, customerId, updatedData) => {
   return new Promise((resolve, reject) => {
-    db.ledger.find({ customerId: customerId }).sort({ date: -1 }).exec((err, entries) => {
+    db.customers.update({ _id: customerId }, { $set: updatedData }, {}, (err, numReplaced) => {
+      if (err) reject(err);
+      resolve(numReplaced > 0);
+    });
+  });
+});
+
+ipcMain.handle('delete-customer', async (event, customerId) => {
+  return new Promise((resolve, reject) => {
+    db.customers.remove({ _id: customerId }, {}, (err, numRemoved) => {
+      if (err) reject(err);
+      
+      // Also remove all ledger entries for this customer
+      if (numRemoved > 0) {
+        db.ledger.remove({ customerId: customerId }, { multi: true });
+      }
+      
+      resolve(numRemoved > 0);
+    });
+  });
+});
+
+ipcMain.handle('get-ledger', async (event, customerId, filters = {}) => {
+  return new Promise((resolve, reject) => {
+    let query = { customerId: customerId };
+    
+    // Apply filters if provided
+    if (filters.title) {
+      query.title = new RegExp(filters.title, 'i');
+    }
+    if (filters.type) {
+      query.type = filters.type;
+    }
+    if (filters.dateFrom && filters.dateTo) {
+      query.date = { $gte: filters.dateFrom, $lte: filters.dateTo };
+    }
+    
+    db.ledger.find(query).sort({ date: -1 }).exec((err, entries) => {
       if (err) reject(err);
       resolve(entries);
     });
@@ -138,6 +211,102 @@ ipcMain.handle('add-ledger-entry', async (event, ledgerData) => {
   });
 });
 
+ipcMain.handle('update-ledger-entry', async (event, entryId, updatedData) => {
+  return new Promise((resolve, reject) => {
+    // First get the original entry to handle product quantity changes
+    db.ledger.findOne({ _id: entryId }, (err, originalEntry) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      
+      // Update the ledger entry
+      db.ledger.update({ _id: entryId }, { $set: updatedData }, {}, (err, numReplaced) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        
+        // Handle product quantity updates if needed
+        if (originalEntry.productId && originalEntry.productQuantity) {
+          // Restore original stock quantity first
+          db.stocks.findOne({ _id: originalEntry.productId }, (err, stock) => {
+            if (err || !stock) {
+              resolve(numReplaced > 0);
+              return;
+            }
+            
+            // Reverse the original transaction effect
+            const restoredQuantity = originalEntry.type === 'debit'
+              ? stock.quantity + originalEntry.productQuantity
+              : stock.quantity - originalEntry.productQuantity;
+            
+            // Apply the new transaction effect if product is still selected
+            const finalQuantity = updatedData.productId && updatedData.productQuantity
+              ? (updatedData.type === 'debit'
+                ? restoredQuantity - updatedData.productQuantity
+                : restoredQuantity + updatedData.productQuantity)
+              : restoredQuantity;
+            
+            db.stocks.update(
+              { _id: originalEntry.productId },
+              { $set: { quantity: finalQuantity } },
+              {},
+              () => resolve(numReplaced > 0)
+            );
+          });
+        } else {
+          resolve(numReplaced > 0);
+        }
+      });
+    });
+  });
+});
+
+ipcMain.handle('delete-ledger-entry', async (event, entryId) => {
+  return new Promise((resolve, reject) => {
+    // First get the entry to handle product quantity changes
+    db.ledger.findOne({ _id: entryId }, (err, entry) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      
+      // Remove the ledger entry
+      db.ledger.remove({ _id: entryId }, {}, (err, numRemoved) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        
+        // Handle product quantity updates if needed
+        if (entry && entry.productId && entry.productQuantity) {
+          db.stocks.findOne({ _id: entry.productId }, (err, stock) => {
+            if (err || !stock) {
+              resolve(numRemoved > 0);
+              return;
+            }
+            
+            // Reverse the transaction effect
+            const newQuantity = entry.type === 'debit'
+              ? stock.quantity + entry.productQuantity
+              : stock.quantity - entry.productQuantity;
+            
+            db.stocks.update(
+              { _id: entry.productId },
+              { $set: { quantity: newQuantity } },
+              {},
+              () => resolve(numRemoved > 0)
+            );
+          });
+        } else {
+          resolve(numRemoved > 0);
+        }
+      });
+    });
+  });
+});
+
 // Expense Management
 ipcMain.handle('get-expense-categories', async () => {
   return new Promise((resolve, reject) => {
@@ -157,9 +326,25 @@ ipcMain.handle('add-expense-category', async (event, categoryData) => {
   });
 });
 
-ipcMain.handle('get-expenses', async () => {
+ipcMain.handle('get-expenses', async (event, filters = {}) => {
   return new Promise((resolve, reject) => {
-    db.expenses.find({}).sort({ date: -1 }).exec((err, expenses) => {
+    let query = {};
+    
+    // Apply filters if provided
+    if (filters.title) {
+      query.title = new RegExp(filters.title, 'i');
+    }
+    if (filters.category) {
+      query.category = filters.category;
+    }
+    if (filters.type) {
+      query.type = filters.type;
+    }
+    if (filters.dateFrom && filters.dateTo) {
+      query.date = { $gte: filters.dateFrom, $lte: filters.dateTo };
+    }
+    
+    db.expenses.find(query).sort({ date: -1 }).exec((err, expenses) => {
       if (err) reject(err);
       resolve(expenses);
     });
@@ -171,6 +356,24 @@ ipcMain.handle('add-expense', async (event, expenseData) => {
     db.expenses.insert(expenseData, (err, newExpense) => {
       if (err) reject(err);
       resolve(newExpense);
+    });
+  });
+});
+
+ipcMain.handle('update-expense', async (event, expenseId, updatedData) => {
+  return new Promise((resolve, reject) => {
+    db.expenses.update({ _id: expenseId }, { $set: updatedData }, {}, (err, numReplaced) => {
+      if (err) reject(err);
+      resolve(numReplaced > 0);
+    });
+  });
+});
+
+ipcMain.handle('delete-expense', async (event, expenseId) => {
+  return new Promise((resolve, reject) => {
+    db.expenses.remove({ _id: expenseId }, {}, (err, numRemoved) => {
+      if (err) reject(err);
+      resolve(numRemoved > 0);
     });
   });
 });
